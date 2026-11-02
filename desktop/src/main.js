@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, net, session, Menu, nativeTheme, safeStorage, shell, dialog, clipboard, systemPreferences } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, net, session, Menu, nativeTheme, safeStorage, shell, dialog, clipboard, systemPreferences, Notification } = require('electron');
 // In the CI smoke test an error at start-up must end the run with its stack, not leave an error dialog nobody can see.
 // A known bug in the HTTP client that ships with Node (an assertion from inside undici when a server closes a connection) must
 // never take the browser down. Other start-up errors in the CI smoke test end the run with their stack; elsewhere they are shown.
@@ -66,6 +66,9 @@ const pwLib = require('./passwords');
 const pagenote = require('./pagenote');
 const chats = require('./chats');
 const startLib = require('./start');
+const autoLib = require('./automations');
+const composer = require('./composer');
+const { featurePosts } = require('./featureposts');
 const { budgetFor } = require('./condense');
 const nodeCrypto = require('crypto');
 const breachLib = require('./breach');
@@ -187,6 +190,7 @@ function applyDoh() {
 function loadStats() { pstats = new PrivacyStats({ file: statsFile }); S.blocked = pstats.today().blocked; }
 function saveStats() { if (pstats) pstats.save(); }
 let statsFile = null;
+let autoStore;
 let chatStore;
 let vault;
 let perms;
@@ -447,10 +451,11 @@ function openStores(id) {
   const pm = f('perms.bin');
   const pv = f('passwords.bin');
   const ch = f('chats.bin');
-  return { chats: new chats.ChatStore({ load: () => ch.load(), save: (d) => ch.save(d) }), vault: new pwLib.Vault({ load: () => pv.load(), save: (d) => pv.save(d) }), perms: new SitePerms({ load: () => pm.load(), save: (d) => pm.save(d) }), memory: new Memory(f('memory.bin')), favicons: new Favicons(f('favicons.bin')), bookmarks: new Bookmarks({ load: () => bm.load(), save: (d) => bm.save(d) }), sessionStore: f('session.bin') };
+  const au = f('automations.bin');
+  return { autos: new autoLib.AutomationStore({ load: () => au.load(), save: (d) => au.save(d) }), chats: new chats.ChatStore({ load: () => ch.load(), save: (d) => ch.save(d) }), vault: new pwLib.Vault({ load: () => pv.load(), save: (d) => pv.save(d) }), perms: new SitePerms({ load: () => pm.load(), save: (d) => pm.save(d) }), memory: new Memory(f('memory.bin')), favicons: new Favicons(f('favicons.bin')), bookmarks: new Bookmarks({ load: () => bm.load(), save: (d) => bm.save(d) }), sessionStore: f('session.bin') };
 }
 function useStores(st) {
-  chatStore = st.chats; mainConv = newConv(); vault = st.vault; perms = st.perms; memory = st.memory; favicons = st.favicons; bookmarks = st.bookmarks; sessionStore = st.sessionStore;
+  autoStore = st.autos; chatStore = st.chats; mainConv = newConv(); vault = st.vault; perms = st.perms; memory = st.memory; favicons = st.favicons; bookmarks = st.bookmarks; sessionStore = st.sessionStore;
   refreshEmbedder();
 }
 // Closes every tab without remembering it or opening a new one: the next profile's tabs take their place.
@@ -1771,6 +1776,123 @@ function wirePasswordsIpc() {
   ipcMain.handle('pw:generate', (e) => (ok(e) ? pwLib.generate(20) : ''));
 }
 
+// ---- Automations: posting a prepared text on a schedule (while Lore is open) ---------------------------------------------------
+// Only text the person approved, only on the schedule they approved, only while Lore is open. The post is made in a small window
+// that uses the profile's own sign-in; if anything fails, the window stays open and the text is on the clipboard.
+let autoWin = null;
+let autoBusy = false;
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+const autoUrl = (a) => (a.site === 'test' ? a.url : autoLib.SITES[a.site].url);
+const autoSession = () => (partitionFor(profiles.active) ? session.fromPartition(partitionFor(profiles.active)) : session.defaultSession);
+function notifyUser(title, body) { try { if (Notification.isSupported()) new Notification({ title, body, silent: false }).show(); } catch { /* no notifications here */ } toast({ text: title + ' ' + body }); }
+function pushAuto() { if (autoWin && !autoWin.isDestroyed()) autoWin.webContents.send('auto:update', autoStore.view()); }
+
+async function runAutomation(a) {
+  if (autoBusy || !autoStore.trusted(a)) return;
+  if (a.site === 'test' && !process.env.LORE_AUTOTEST) return;
+  const text = autoStore.nextText(a);
+  if (!text) return;
+  autoBusy = true;
+  const label = autoLib.SITES[a.site].name;
+  const n = a.runCount + 1;
+  let w = null;
+  let result = { ok: false, note: '' };
+  try {
+    w = new BrowserWindow({ width: 1000, height: 740, show: false, title: T('auto.posting', { n, total: a.drafts.length, site: label }), webPreferences: { sandbox: true, contextIsolation: true, session: autoSession() } });
+    w.setMenuBarVisibility(false);
+    w.showInactive();
+    await Promise.race([w.loadURL(autoUrl(a)).catch(() => {}), sleepMs(30000)]);
+    await sleepMs(3500);
+    // The approval is checked again right before acting.
+    result = autoStore.trusted(a) ? await composer.post(w.webContents, { site: a.site, text, allowAnyHost: a.site === 'test' }) : { ok: false, note: 'changed after approval' };
+  } catch (e) { result = { ok: false, note: String(e && e.message || e).slice(0, 120) }; }
+  autoStore.recordRun(a.id, result);
+  if (result.ok) {
+    notifyUser(T('auto.posted', { n, total: a.drafts.length, site: label }), '');
+    setTimeout(() => { try { if (w && !w.isDestroyed()) w.close(); } catch { /* gone */ } }, 4000);
+  } else {
+    clipboard.writeText(text);
+    notifyUser(T('auto.failed', { site: label }), T('auto.failedWhy', { why: result.note || '?' }));
+    try { if (w && !w.isDestroyed()) w.show(); } catch { /* gone */ }
+  }
+  autoBusy = false;
+  pushAuto();
+}
+function automationTick() {
+  if (!autoStore || autoBusy) return;
+  const now = Date.now();
+  for (const a of autoStore.late(now)) autoStore.skip(a.id, now); // too long ago to make up
+  const [a] = autoStore.due(now);
+  if (a) runAutomation(a);
+}
+
+function openAutomations() {
+  if (autoWin && !autoWin.isDestroyed()) return autoWin.close();
+  autoWin = new Sheet({ name: 'automations',
+    title: T('auto.title'),
+    webPreferences: { preload: path.join(__dirname, 'automations-preload.js'), contextIsolation: true, sandbox: true }
+  });
+  autoWin.loadFile(path.join(__dirname, 'ui', 'automations.html'), { query: { lang: L() } });
+  autoWin.on('closed', () => { autoWin = null; });
+}
+
+function wireAutomationsIpc() {
+  const ok = (e) => autoWin && !autoWin.isDestroyed() && e.sender === autoWin.webContents;
+  const hm = (t) => new Date(t).toLocaleTimeString(L() === 'vi' ? 'vi-VN' : undefined, { hour: '2-digit', minute: '2-digit' });
+  ipcMain.on('auto:open', (e) => { if (e.sender === win.webContents) openAutomations(); });
+  ipcMain.handle('auto:list', (e) => (ok(e) ? { items: autoStore.view(), test: !!process.env.LORE_AUTOTEST } : { items: [] }));
+  // The ready-made use case: one introduction of a feature of Lore every hour for the rest of today, on Facebook.
+  ipcMain.handle('auto:template', (e) => {
+    if (!ok(e)) return null;
+    const now = new Date();
+    const start = new Date(now); start.setMinutes(0, 0, 0); start.setHours(now.getHours() + (now.getMinutes() > 50 ? 2 : 1));
+    const end = new Date(now); end.setHours(23, 59, 59, 0);
+    const slots = Math.max(1, Math.min(8, Math.floor((end - start) / 3600000) + 1));
+    if (start > end) return { error: 'late' };
+    autoStore.add({ kind: 'post', site: 'facebook', name: T('auto.tplName'), drafts: featurePosts(L(), slots), schedule: { type: 'every', minutes: 60 }, startAt: start.getTime(), until: end.getTime() });
+    return { items: autoStore.view() };
+  });
+  ipcMain.handle('auto:edit', (e, id, drafts) => {
+    if (!ok(e) || !Array.isArray(drafts)) return null;
+    try { autoStore.update(String(id), { drafts: drafts.map(String) }); } catch { return { error: 'bad' }; }
+    return { items: autoStore.view() };
+  });
+  ipcMain.handle('auto:approve', async (e, id) => {
+    if (!ok(e)) return null;
+    const a = autoStore.get(String(id));
+    if (!a) return null;
+    const label = autoLib.SITES[a.site].name;
+    const r = await dialog.showMessageBox(win, {
+      type: 'warning', buttons: [T('auto.approveGo'), T('set.priv.cancel')], defaultId: 1, cancelId: 1,
+      message: T('auto.approveAsk', { n: a.drafts.length, site: label }),
+      detail: T('auto.approveDetail', { site: label, every: a.schedule.minutes || 0, from: hm(a.startAt), to: hm(a.until || a.startAt), first: a.drafts[0].slice(0, 120) })
+    });
+    if (r.response !== 0) return { items: autoStore.view() };
+    autoStore.approve(a.id);
+    pushAuto();
+    return { items: autoStore.view() };
+  });
+  ipcMain.handle('auto:pause', (e, id, on) => { if (!ok(e)) return null; autoStore.pause(String(id), !!on); return { items: autoStore.view() }; });
+  ipcMain.handle('auto:remove', async (e, id) => {
+    if (!ok(e)) return null;
+    const r = await dialog.showMessageBox(win, { type: 'question', buttons: [T('auto.delete'), T('set.priv.cancel')], defaultId: 1, cancelId: 1, message: T('auto.deleteAsk') });
+    if (r.response === 0) autoStore.remove(String(id));
+    return { items: autoStore.view() };
+  });
+  // Post the next text right now (still only approved text), after asking again.
+  ipcMain.handle('auto:runNow', async (e, id) => {
+    if (!ok(e)) return null;
+    const a = autoStore.get(String(id));
+    if (!a || !autoStore.trusted(a) || !autoStore.nextText(a)) return { items: autoStore.view() };
+    // (the automated tests have no one to answer a dialog; they only ever use the stand-in page)
+    const r = process.env.LORE_AUTOTEST && a.site === 'test' ? { response: 0 } : await dialog.showMessageBox(win, { type: 'warning', buttons: [T('auto.runGo'), T('set.priv.cancel')], defaultId: 1, cancelId: 1, message: T('auto.runAsk', { site: autoLib.SITES[a.site].name }), detail: autoStore.nextText(a).slice(0, 300) });
+    if (r.response === 0) runAutomation(a);
+    return { items: autoStore.view() };
+  });
+  // Only for the automated tests: makes an approved automation on the stand-in page.
+  if (process.env.LORE_AUTOTEST) ipcMain.handle('auto:testcreate', (e, spec) => { if (!ok(e)) return null; const a = autoStore.add({ ...spec, site: 'test', kind: 'post' }); autoStore.approve(a.id); return { items: autoStore.view() }; });
+}
+
 // ---- Lock (PRV-06), self-destructing tabs (PRV-05), email aliases (PRV-07), breach check (PRV-08) ------------------------
 // The lock asks for Touch ID on a Mac that has it. Windows and Linux have no equivalent in Electron, so the switch is
 // shown as unavailable there rather than pretending to protect anything.
@@ -2645,7 +2767,8 @@ function wireIpc() {
         { type: 'separator' },
         { label: T('cmp.menu'), click: () => openCompare() },
         { label: T('org.menu'), accelerator: 'CmdOrCtrl+Alt+O', click: () => openOrganize('tabs') },
-        { label: T('menu.tasks'), accelerator: 'CmdOrCtrl+Shift+K', click: () => openTasks() }
+        { label: T('menu.tasks'), accelerator: 'CmdOrCtrl+Shift+K', click: () => openTasks() },
+        { label: T('auto.menu'), click: openAutomations }
       ] },
       { label: T('more.library'), submenu: [
         { label: T('bm.manage'), accelerator: 'CmdOrCtrl+Alt+B', click: openBookmarks },
@@ -2767,6 +2890,7 @@ function buildMenu() {
       { label: T('split.menu'), accelerator: 'CmdOrCtrl+Alt+D', click: () => openSplit() },
       { label: T('rep.menu'), click: openReport },
       { label: T('cmp.menu'), accelerator: 'CmdOrCtrl+Alt+C', click: () => openCompare() },
+      { label: T('auto.menu'), click: openAutomations },
       { label: T('org.menu'), accelerator: 'CmdOrCtrl+Alt+O', click: () => openOrganize('tabs') },
       { label: T('menu.find'), accelerator: 'CmdOrCtrl+F', click: openFind },
       { label: T('menu.downloads'), accelerator: 'CmdOrCtrl+J', click: openDownloads },
@@ -2827,6 +2951,8 @@ app.whenReady().then(() => {
   applyAppearance();
   applyDoh();
   applySearch();
+  setInterval(automationTick, 30000).unref();
+  setTimeout(automationTick, 15000).unref();
   nativeTheme.on('updated', applyAppearance);
   const profFile = path.join(app.getPath('userData'), 'profiles.json');
   const dataDir = app.getPath('userData');
@@ -2857,6 +2983,7 @@ app.whenReady().then(() => {
   wirePrivIpc();
   wireTipIpc();
   wirePasswordsIpc();
+  wireAutomationsIpc();
   wireWelcomeIpc();
   stage('ipc');
   statsFile = path.join(app.getPath('userData'), 'stats.json');
