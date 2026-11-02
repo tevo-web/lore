@@ -160,6 +160,7 @@
     "d.upd": "Lore tự kiểm tra bản cập nhật. Bạn có thể tắt trong Cài đặt.",
     "d.sums": "Mỗi bản phát hành đều kèm mã SHA-256 để bạn đối chiếu.",
     "d.all": "Tất cả bản phát hành",
+    "w.p1b": "Vẫn không mở được, hoặc báo ứng dụng bị hỏng? Hãy chạy lệnh này trong Terminal rồi mở lại Lore:",
     "w.s1": "macOS không cho mở ứng dụng",
     "w.p1": "Do ứng dụng chưa được ký số. Hãy kéo Lore vào thư mục Applications, nhấp chuột phải vào Lore, chọn Open rồi xác nhận. Bạn chỉ cần làm một lần.",
     "w.s2": "Windows hiện cảnh báo \"Windows protected your PC\"",

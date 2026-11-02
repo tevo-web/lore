@@ -331,6 +331,8 @@
       <details data-unsigned="mac">
         <summary data-i18n="w.s1">macOS blocks the app</summary>
         <p data-i18n="w.p1">It is not signed yet. Drag Lore to Applications, right-click it, choose Open, and confirm. Once is enough.</p>
+        <p data-i18n="w.p1b">Still will not open, or it says the app is damaged? Run this in Terminal, then open Lore again:</p>
+        <pre><code>xattr -cr /Applications/Lore.app</code></pre>
       </details>
       <details data-unsigned="win">
         <summary data-i18n="w.s2">Windows warns "protected your PC"</summary>
