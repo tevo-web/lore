@@ -284,3 +284,14 @@ ol.srcs li.used .sl2 b::before{content:"● ";color:var(--accent);font-size:8px;
 .cutnote{display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px 10px;border-radius:8px;background:var(--warn-soft);color:var(--warn);font-size:12.5px}
 .cutnote span{flex:1}
 .cutnote .small{color:inherit;border-color:currentColor;flex:none}
+
+/* Operate mode: a small toggle beside the model chip, the steps as a quiet numbered list. */
+.actbtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linejoin:round}
+.actbtn::after{display:none}
+.actbtn{margin-right:2px}
+.actbtn[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+.actsteps{margin:0 0 10px;padding-left:20px;color:var(--muted);font-size:12.5px}
+.actsteps li{margin:2px 0}
+.actsteps li.no{color:var(--warn)}
+.actsteps small{opacity:.8}
+.actans{margin:6px 0 0;font-weight:500}

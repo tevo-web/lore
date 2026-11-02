@@ -68,6 +68,8 @@ const chats = require('./chats');
 const startLib = require('./start');
 const autoLib = require('./automations');
 const composer = require('./composer');
+const visionLib = require('./visionagent');
+const observe = require('./observe');
 const { featurePosts } = require('./featureposts');
 const { budgetFor } = require('./condense');
 const nodeCrypto = require('crypto');
@@ -759,6 +761,7 @@ function openSplit(withId) {
 
 function selectTab(id) {
   closeSheet();
+  if (actRun && actRun.tab.id !== id) actRun.ctl.abort(); // the page being operated must stay in front
   activeId = id;
   const t = active();
   syncViews();
@@ -1183,6 +1186,55 @@ async function pageAssistant(action, question = '') {
     mine.text = text;
     sp({ ...meta, state: 'done', found: a.found, answer: a.answer, passages: a.passages, ai: a.ai, cut: a.cut, safety, tokens: cached ? { in: 0, out: 0, cached: true } : usedTokens(l) });
   } catch { sp({ ...meta, state: 'error', error: 'pg.error' }); }
+}
+
+// ---- Look and operate (AI-17): the assistant clicks, chooses and scrolls on the page to find what only shows that way -------------
+// It lists the page's controls with numbers (cheap text), looks at a small screenshot only at the start or when stuck, and does one
+// step at a time with real mouse events. It only looks things up: anything that buys, sends, deletes, signs in or submits asks the
+// person first, showing what it is about to press.
+const actConsent = new Set(); // "host|provider" pairs the person allowed to send page content to, for this run of Lore
+let actRun = null;            // { ctl, tab }
+async function actOnPage(task) {
+  const tab = active();
+  if (!tab) return;
+  const web = !tab.isHome && /^https?:/.test(tab.url);
+  const conv = convFor(tab);
+  assistOn = true;
+  claimPanel(tab);
+  const meta = { mode: 'act', question: task, seq: ++paSeq, page: pageMeta(tab) };
+  const fail = (key) => sendPageFor(tab, { ...meta, state: 'error', error: key });
+  if (!web || tab.private || isSensitiveHost(hostOfUrl(tab.url))) return fail('act.notHere');
+  if (aiOffFor(tab.url)) return fail('pg.aiOff');
+  if (actRun) return fail('act.busy');
+  const m = await modelInfo();
+  if (!m.ready) return fail('pg.needModel');
+  addSource(conv, tab); sendContext(tab);
+  const host = hostOfUrl(tab.url).replace(/^www\./, '');
+  const wantImages = !!llm.vision && settings.get().aiSaving !== 'save';
+  if (m.remote && !actConsent.has(host + '|' + m.remote)) {
+    const r = await dialog.showMessageBox(win, { type: 'question', buttons: [T('act.allow'), T('set.priv.cancel')], defaultId: 1, cancelId: 1, message: T('act.consentAsk', { host, to: m.remote }), detail: T(wantImages ? 'act.consentImages' : 'act.consentText') });
+    if (r.response !== 0) return sendPageFor(tab, { ...meta, state: 'error', error: 'act.declinedSend' });
+    actConsent.add(host + '|' + m.remote);
+  }
+  const ctl = new AbortController();
+  actRun = { ctl, tab };
+  const live = [];
+  const show = (state, extra = {}) => sendPageFor(tab, { ...meta, state, steps: live.map((x) => ({ text: x.text, result: x.result || (x.blocked ? 'blocked' : x.declined ? 'declined' : '') })), remote: m.remote, model: m.model, ...extra });
+  show('working');
+  llm.usage = null;
+  const res = await visionLib.run({
+    task, driver: observe.pageDriver(tab.view.webContents), llm, lang: L(), useImages: wantImages, signal: ctl.signal,
+    onStep: (s) => { live.push(s); show('working'); },
+    confirm: async (info) => {
+      const r = await dialog.showMessageBox(win, { type: 'warning', buttons: [T('act.doThis'), T('act.stop')], defaultId: 1, cancelId: 1, message: T('act.confirmAsk', { what: info.what }), detail: T('act.confirmWhy.' + info.why, { host: info.host }) });
+      return r.response === 0;
+    }
+  });
+  actRun = null;
+  const tokens = m.remote ? { in: res.tokens.in, out: res.tokens.out } : null;
+  if (tokens && pstats) { pstats.record('tin', '', tokens.in); pstats.record('tout', '', tokens.out); }
+  if (res.ok) show('done', { answer: res.answer, evidence: res.evidence, found: true, ai: true, tokens });
+  else show('error', { error: 'act.why.' + res.why, detail: res.detail || '', tokens });
 }
 
 // Opens the page tools without running anything, so the options are visible before the user asks for one.
@@ -2655,6 +2707,7 @@ function wireIpc() {
   if (process.env.LORE_SHOTS) ipcMain.on('debug:shots', (e, o) => { if (e.sender !== win.webContents) return; if (o && o.bounds) win.setBounds(o.bounds); win.show(); app.focus({ steal: true }); win.moveTop(); });
   ipcMain.on('tab:new', () => openTab());
   ipcMain.on('model:menu', (e, x, y) => { if (panel && e.sender === panel.webContents && Number.isFinite(x) && Number.isFinite(y)) modelMenu(x, y); });
+  ipcMain.on('act:stop', (e) => { if (panel && e.sender === panel.webContents && actRun) actRun.ctl.abort(); });
   ipcMain.on('side:toggle', (e) => { if (e.sender === win.webContents) toggleSidebar(); });
   ipcMain.on('tab:select', (_e, id) => selectTab(id));
   ipcMain.on('tab:close', (_e, id) => closeTab(id));
@@ -2695,7 +2748,8 @@ function wireIpc() {
   ipcMain.on('media:open', () => openDownload());
   // Page assistant: only the trusted panel may drive it.
   ipcMain.on('page:do', (e, action, arg) => {
-    if (e.sender !== panel.webContents || !['summarize', 'translate', 'ask', 'tasks', 'task'].includes(action)) return;
+    if (e.sender !== panel.webContents || !['summarize', 'translate', 'ask', 'act', 'tasks', 'task'].includes(action)) return;
+    if (action === 'act') return actOnPage(String(arg || '').slice(0, 400));
     if (action === 'tasks') return openTasks();
     if (action === 'task') return taskLib.BUILTIN.some((t) => t.id === arg && t.group === 'page') ? openTasks({ select: String(arg), auto: true }) : undefined;
     if (action === 'ask') return panelPrompt(String(arg || ''));

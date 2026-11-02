@@ -125,3 +125,17 @@ test('Gemini is reached through Google\'s OpenAI-compatible address with the key
   assert.strictEqual(seen.opt.headers.authorization, 'Bearer K');
   assert.deepStrictEqual(m.usage, { in: 12, out: 3 });
 });
+
+test('pictures are sent in each provider\'s own shape, and only when a message has them', async () => {
+  const seen = [];
+  const f = async (url, opt) => { seen.push({ url, body: JSON.parse(opt.body) }); return { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }], content: [{ type: 'text', text: 'ok' }], message: { content: 'ok' } }) }; };
+  const msgs = [{ role: 'system', content: 'sys' }, { role: 'user', content: 'look', images: ['QUJD'] }];
+  await createLlm({ provider: 'openai', openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', key: 'k' } }, { fetchImpl: f }).chat(msgs);
+  assert.deepStrictEqual(seen[0].body.messages[1].content[1], { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,QUJD' } });
+  await createLlm({ provider: 'anthropic', anthropic: { model: 'claude-haiku-5-5', key: 'k' } }, { fetchImpl: f }).chat(msgs);
+  assert.deepStrictEqual(seen[1].body.messages[0].content[0], { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'QUJD' } });
+  await createLlm({ provider: 'openai', openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', key: 'k' } }, { fetchImpl: f }).chat([{ role: 'user', content: 'plain' }]);
+  assert.strictEqual(seen[2].body.messages[0].content, 'plain');
+  assert.ok(createLlm({ provider: 'local', local: { url: 'http://127.0.0.1:11434', model: 'qwen2.5vl:7b' } }).vision);
+  assert.ok(!createLlm({ provider: 'local', local: { url: 'http://127.0.0.1:11434', model: 'qwen2.5:3b' } }).vision);
+});

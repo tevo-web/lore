@@ -9,10 +9,11 @@ const clip = (s, n) => String(s || '').slice(0, n);
 function keep(s) {
   if (!s || !Number.isFinite(s.seq) || s.state !== 'done' || s.mode === 'translate') return null;
   return {
-    seq: s.seq, mode: ['summarize', 'ask', 'sel'].includes(s.mode) ? s.mode : 'ask', state: 'done', question: clip(s.question, 300),
+    seq: s.seq, mode: ['summarize', 'ask', 'sel', 'act'].includes(s.mode) ? s.mode : 'ask', state: 'done', question: clip(s.question, 300),
     bullets: Array.isArray(s.bullets) ? s.bullets.slice(0, 8).map((b) => clip(b, 400)) : undefined,
     answer: s.answer === undefined ? undefined : clip(s.answer, 3000), found: s.found, ai: !!s.ai, tokens: s.tokens && Number.isFinite(s.tokens.in) ? { in: s.tokens.in | 0, out: s.tokens.out | 0, cached: !!s.tokens.cached } : undefined, cut: s.cut ? true : undefined,
     passages: Array.isArray(s.passages) ? s.passages.slice(0, 2).map((p) => clip(p, 500)) : undefined,
+    steps: Array.isArray(s.steps) ? s.steps.slice(0, 14).map((x) => ({ text: clip(x.text, 160), result: clip(x.result, 80) })) : undefined, evidence: s.evidence ? clip(s.evidence, 300) : undefined,
     cites: Array.isArray(s.cites) ? s.cites.filter(Number.isInteger).slice(0, 8) : undefined,
     srcs: Array.isArray(s.srcs) ? s.srcs.slice(0, 6).map((x) => ({ n: x.n | 0, title: clip(x.title, 160), host: clip(x.host, 100), url: /^https?:\/\//.test(x.url || '') ? clip(x.url, 2000) : '', passage: clip(x.passage, 300) })) : undefined,
     model: clip(s.model, 60), remote: clip(s.remote, 100), page: s.page ? { title: clip(s.page.title, 200), host: clip(s.page.host, 100) } : undefined

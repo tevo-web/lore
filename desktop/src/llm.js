@@ -9,6 +9,10 @@
 const hostOf = (u) => { try { return new URL(u).host; } catch { return ''; } };
 const isLocalHost = (u) => { try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(u).hostname); } catch { return false; } };
 const trimSlash = (u) => u.replace(/\/+$/, '');
+// A message may carry pictures (base64 JPEG) in `images`; each provider wants them in its own shape.
+const VISION_MODEL = /vl\b|vision|llava|minicpm-v|moondream|bakllava|gemma3|pixtral|gpt-4o|gpt-4\.1|gpt-5|gemini|claude|mistral-(small|medium|large)/i;
+const asOpenAi = (m) => (m.images && m.images.length ? { role: m.role, content: [{ type: 'text', text: m.content }, ...m.images.map((b) => ({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + b } }))] } : { role: m.role, content: m.content });
+const asAnthropic = (m) => (m.images && m.images.length ? { role: m.role, content: [...m.images.map((b) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })), { type: 'text', text: m.content }] } : { role: m.role, content: m.content });
 // Errors carry an i18n key as the message; the UI translates it.
 // The API's own explanation ("model: not found", ...) is what makes a 400 fixable, so keep it.
 async function httpError(r) {
@@ -32,7 +36,7 @@ const NUM_CTX = 8192;
 function ollama({ url, model }, f) {
   const base = trimSlash(url);
   return {
-    label: 'On-device AI', model, remote: false, host: hostOf(base),
+    vision: VISION_MODEL.test(model), label: 'On-device AI', model, remote: false, host: hostOf(base),
     async available() {
       try {
         const r = await f(base + '/api/tags', { signal: AbortSignal.timeout(700) });
@@ -60,14 +64,14 @@ function openai({ baseUrl, model, key }, f) {
   const base = trimSlash(baseUrl);
   const remote = !isLocalHost(base);
   return {
-    label: hostOf(base), model, remote, host: hostOf(base),
+    vision: VISION_MODEL.test(model), label: hostOf(base), model, remote, host: hostOf(base),
     async available() { return !!model && (!!key || !remote); },
     async chat(messages, { timeoutMs = 30000, maxTokens = MAX_TOKENS, temperature = TEMP } = {}) {
       const headers = { 'content-type': 'application/json' };
       if (key) headers.authorization = 'Bearer ' + key;
       const r = await f(base + '/chat/completions', {
         method: 'POST', headers, signal: AbortSignal.timeout(timeoutMs),
-        body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens })
+        body: JSON.stringify({ model, messages: messages.map(asOpenAi), temperature, max_tokens: maxTokens })
       });
       if (!r.ok) throw await httpError(r);
       const j = await r.json();
@@ -80,7 +84,7 @@ function openai({ baseUrl, model, key }, f) {
 
 function anthropic({ model, key }, f) {
   return {
-    label: 'api.anthropic.com', model, remote: true, host: 'api.anthropic.com',
+    vision: true, label: 'api.anthropic.com', model, remote: true, host: 'api.anthropic.com',
     async available() { return !!model && !!key; },
     async chat(messages, { timeoutMs = 30000, maxTokens = MAX_TOKENS } = {}) {
       const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
@@ -88,7 +92,7 @@ function anthropic({ model, key }, f) {
         method: 'POST', signal: AbortSignal.timeout(timeoutMs),
         headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
         // No temperature (newer Claude models reject it) and no empty system block (the API returns 400 for it).
-        body: JSON.stringify({ model, max_tokens: maxTokens, ...(system ? { system } : {}), messages: messages.filter((m) => m.role !== 'system') })
+        body: JSON.stringify({ model, max_tokens: maxTokens, ...(system ? { system } : {}), messages: messages.filter((m) => m.role !== 'system').map(asAnthropic) })
       });
       if (!r.ok) throw await httpError(r);
       const j = await r.json();

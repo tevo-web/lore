@@ -210,7 +210,7 @@ function msgFor(s) {
   return m;
 }
 
-const TITLE = { summarize: () => T('pg.summary'), translate: () => T('pg.translate'), ask: () => T('pg.answer'), sel: () => T('ai.result') };
+const TITLE = { act: () => T('act.title'), summarize: () => T('pg.summary'), translate: () => T('pg.translate'), ask: () => T('pg.answer'), sel: () => T('ai.result') };
 
 function head(s, copyText) {
   const h = el('div', 'ch');
@@ -242,6 +242,15 @@ function safetyNote(r) {
 function body(s) {
   const b = el('div', 'cb');
   const extra = [];
+  if (s.state === 'working' && s.mode === 'act') {
+    const ol = el('ol', 'actsteps');
+    for (const x of s.steps || []) ol.append(el('li', '', x.text));
+    if (ol.children.length) b.append(ol);
+    const w = el('div', 'wait'); const d = el('span', 'dots'); d.append(el('i'), el('i'), el('i')); w.append(d, el('span', '', T('act.working')));
+    const stop = el('button', 'small', T('act.stop')); stop.type = 'button'; stop.addEventListener('click', () => agent.actStop()); w.append(stop);
+    b.append(w);
+    return { b, copy: '' };
+  }
   if (s.state === 'working') {
     if (s.mode === 'translate' && s.total) {
       b.append(el('p', '', T('pg.translating', { done: s.done, total: s.total })));
@@ -254,8 +263,26 @@ function body(s) {
     }
     return { b, copy: '' };
   }
+  if (s.state === 'error' && s.mode === 'act') {
+    const ol = el('ol', 'actsteps');
+    for (const x of s.steps || []) ol.append(el('li', x.result === 'declined' || x.result === 'blocked' ? 'no' : '', x.text));
+    if (ol.children.length) b.append(ol);
+    b.append(el('p', 'err', T(s.error) + (s.detail ? ' (' + s.detail + ')' : '')));
+    return { b, copy: '' };
+  }
   if (s.state === 'error') { b.append(el('p', 'err', T(s.error, { lang: s.target || '' }))); return { b, copy: '' }; }
   let copy = '';
+  if (s.mode === 'act') {
+    // Operating the page: the steps so far, then the answer. Every press is listed, so nothing happens out of sight.
+    const ol = el('ol', 'actsteps');
+    for (const x of s.steps || []) { const li = el('li', x.result === 'blocked' || x.result === 'declined' ? 'no' : ''); li.append(el('span', '', x.text)); if (x.result && !['clicked', 'typed', 'selected', 'scrolled', 'pressed'].includes(x.result)) li.append(el('small', '', ' · ' + x.result)); ol.append(li); }
+    if (ol.children.length) b.append(ol);
+    if (s.answer) { b.append(el('p', 'actans', s.answer)); copy = s.answer; if (s.evidence) b.append(el('blockquote', '', s.evidence)); }
+    if (s.tokens) extra.push(T('pg.tokens', { i: s.tokens.in.toLocaleString(lang === 'vi' ? 'vi-VN' : 'en-US'), o: s.tokens.out.toLocaleString(lang === 'vi' ? 'vi-VN' : 'en-US') }));
+    if (s.remote) extra.push(T('pg.sentTo', { host: s.remote }));
+    if (extra.length) { const m = el('div', 'metas'); for (const t of extra) m.append(el('span', 'fine', t)); b.append(m); }
+    return { b, copy };
+  }
   if (s.mode === 'sel') { b.append(el('p', '', s.answer)); b.firstChild.style.whiteSpace = 'pre-wrap'; copy = s.answer; }
   else if (s.mode === 'summarize') {
     const ul = el('ul', 'pts');
@@ -394,7 +421,11 @@ agent.onThread((t) => {
   $('#feed').scrollTop = $('#feed').scrollHeight;
 });
 agent.onPage((s) => { lang = s.lang || lang; LORE_I18N.apply(lang); last = { fn: renderPage, s }; renderPage(s); });
-$('#askform').addEventListener('submit', (e) => { e.preventDefault(); const q = $('#askq').value.trim(); if (!q) return; $('#askq').value = ''; agent.pageDo('ask', q); });
+// "Operate": the next prompt is carried out on the page (press, choose, scroll) instead of answered from its text.
+let actOn = false;
+function setAct(on) { actOn = on; $('#actbtn').setAttribute('aria-pressed', String(on)); $('#askq').placeholder = T(on ? 'act.ph' : 'pg.askph'); }
+$('#actbtn').addEventListener('click', () => { setAct(!actOn); $('#askq').focus(); });
+$('#askform').addEventListener('submit', (e) => { e.preventDefault(); const q = $('#askq').value.trim(); if (!q) return; $('#askq').value = ''; agent.pageDo(actOn ? 'act' : 'ask', q); if (actOn) setAct(false); });
 
 agent.onState((s) => { setMode(false); last = { fn: render, s }; $('.note').style.display = ''; $('.sim').style.display = ''; render(s); });
 agent.onDl((s) => { setMode(false); last = { fn: renderDl, s }; $('.note').style.display = 'none'; $('.sim').style.display = 'none'; renderDl(s); });
