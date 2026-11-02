@@ -129,7 +129,7 @@ function parseClaims(reply, evidenceCount) {
 async function answerFromSite(found, query, { llm, lang }) {
   const T = (k, v) => tr(lang, k, v);
   const { site, items } = found;
-  const sources = items.slice(0, 8).map((i) => ({ title: i.title, url: i.url }));
+  const sources = items.slice(0, 8).map((i) => ({ title: i.title, url: i.url, desc: i.desc || '' }));
   const base = { provider: site.name, sources, perSource: true };
   const ready = llm && (await llm.available());
   if (!ready) return { ...base, summary: T('ans.siteList', { site: site.name }), meta: T('ans.siteMeta', { site: site.name }) };

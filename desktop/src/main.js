@@ -622,6 +622,12 @@ function openTab(target, { private: priv = false, lazy = false, pinned = false, 
       if (isOurHome(wc.getURL()) && tab.id === activeId) ({ private: () => openPrivate(), memory: openMemoryLocked, settings: openSettings, tasks: () => openTasks(), ai: () => openSettings('ai'), organize: () => openOrganize('tabs'), bookmarks: openBookmarks, downloads: openDownloads, chat: () => openChat(sp.get('k') || '') }[a] || (() => {}))();
       return;
     }
+    if (url.startsWith('lore-follow:')) {
+      e.preventDefault();
+      const fq = new URL(url).searchParams.get('q');
+      if (fq && isOurHome(wc.getURL()) && tab.id === activeId) followThread(tab, fq.slice(0, 400));
+      return;
+    }
     if (!url.startsWith('lore-run:')) return guard(e, url);
     e.preventDefault();
     const q = new URL(url).searchParams.get('q');
@@ -1138,6 +1144,7 @@ async function pageAssistant(action, question = '') {
   const tab = active();
   if (!tab) return;
   const web = !tab.isHome && /^https?:/.test(tab.url);
+  if (action === 'ask' && tab.isHome && tab.thread) return followThread(tab, question);
   const conv = convFor(tab);
   if (web && aiOffFor(tab.url)) { assistOn = true; claimPanel(tab); return sendPageFor(tab, { mode: action, question, remote: '', model: '', seq: ++paSeq, page: pageMeta(tab), state: 'error', error: 'pg.aiOff' }); }
   // A question can also be about the pages the conversation already read, even from a tab that has no page.
@@ -1187,6 +1194,49 @@ async function pageAssistant(action, question = '') {
     if (!a) { a = await pageassist.ask({ text, question, llm: l, lang: L(), history: hist, passages: bud.passages }); if (ck && a.ai && !a.cut) cachePut(ck, a); }
     mine.text = text;
     sp({ ...meta, state: 'done', found: a.found, answer: a.answer, passages: a.passages, ai: a.ai, cut: a.cut, safety, tokens: cached ? { in: 0, out: 0, cached: true } : usedTokens(l) });
+  } catch { sp({ ...meta, state: 'error', error: 'pg.error' }); }
+}
+
+// ---- Keep talking after an answer ------------------------------------------------------------------------------------------------
+// The first answer (from the web, a news site or Memory) is shown on the tab. Asking more moves it into the assistant panel, which
+// then answers from the same sources, with numbered citations, like any other conversation. Only Lore writes tab.thread; the page
+// can only send the question text.
+function rememberThread(tab, q, a, webUrl) {
+  const items = a.sources && a.sources.length
+    ? a.sources.map((s) => ({ url: s.url, title: s.title, text: s.desc ? s.title + '. ' + s.desc : (a.evidence ? a.evidence.join(' ') : a.summary) }))
+    : [{ url: webUrl, title: a.provider || 'Lore', text: a.summary }];
+  tab.thread = { q, answer: a.summary, ai: !!a.claims, model: llm && llm.model || '', items: items.slice(0, 8), seeded: false };
+}
+function rememberMemoryThread(tab, q, res) {
+  const items = res.sources.map((s) => ({ url: s.url, title: s.title, text: s.passages.join(' ') }));
+  tab.thread = { q, answer: res.answer || '', ai: !!res.answer, model: llm && llm.model || '', items, seeded: false };
+}
+async function followThread(tab, question) {
+  const th = tab.thread;
+  if (!th || !th.items.length) return;
+  const conv = convFor(tab);
+  const srcOf = (items) => items.map((x, i) => ({ n: i + 1, title: x.title, host: hostOfUrl(x.url).replace(/^www\./, ''), url: x.url, tabId: 0, passage: '' }));
+  if (!th.seeded) {
+    th.seeded = true;
+    conv.states.push({ mode: 'ask', question: th.q, state: 'done', seq: ++paSeq, found: true, answer: th.answer, cites: [], srcs: srcOf(th.items), ai: th.ai, model: th.model, page: pageMeta(tab), remote: '' });
+    saveConv(conv);
+  }
+  if (run) { run.cancel(); run = null; }
+  assistOn = true;
+  pa = null;
+  claimPanel(tab);
+  const mine = pa;
+  const m = await modelInfo();
+  const meta = { mode: 'ask', question, remote: m.remote, model: m.model, seq: ++paSeq, page: pageMeta(tab) };
+  const sp = (x) => sendPageFor(tab, x);
+  sp({ ...meta, state: 'working' });
+  try {
+    const l = m.ready ? llm : null;
+    if (l) l.usage = null;
+    const res = await recall.askSources({ items: th.items, question, llm: l, lang: L(), history: chats.context(conv.states) });
+    if (pa !== mine) return;
+    sp({ ...meta, state: 'done', found: res.found, answer: res.answer, cites: res.cites, ai: !!res.answer, cut: !!res.cut, tokens: usedTokens(l),
+      srcs: res.sources.map((x) => ({ n: x.n, title: x.title, host: x.host, url: th.items[x.n - 1].url, tabId: 0, passage: x.passages[0] || '' })) });
   } catch { sp({ ...meta, state: 'error', error: 'pg.error' }); }
 }
 
@@ -1284,6 +1334,7 @@ async function answerFromMemory(question) {
     const tab = active();
     const wc = tab.view.webContents;
     tab.title = question; tab.isHome = true;
+    rememberMemoryThread(tab, question, res);
     loadHome(wc, { kind: 'memory', q: question, results: JSON.stringify(res.sources.map((s) => ({ url: s.url, title: s.title, ts: s.ts, snippet: s.passages[0] || '' }))), total: String(memory.size), recall: JSON.stringify({ answer: res.answer, cites: res.cites, remote: m.ready && m.remote ? m.remote : '' }), web: searchUrl(question) });
     pushState();
     return true;
@@ -1307,6 +1358,7 @@ async function openByName(text) {
 
 async function submit(text) {
   if (!text.trim()) return;
+  if (active()) active().thread = null;
   if (await openByName(text)) return;
   // Typing the name of a saved task runs it.
   const saved = taskStore && taskStore.byName(text);
@@ -1333,7 +1385,7 @@ async function submit(text) {
     let a;
     try { a = await answerQuery(r.text, { llm, lang: L(), wiki: (q) => wikiAnswer(q, smartFetch), site: (q) => siteNews.lookup(q, smartFetch) }); } finally { tab.busy = false; tab.pending = ''; }
     if (!tabs.includes(tab)) return;
-    if (a) loadHome(wc, { kind: 'answer', q: r.text, web: r.url, answer: JSON.stringify(a) });
+    if (a) { rememberThread(tab, r.text, a, r.url); loadHome(wc, { kind: 'answer', q: r.text, web: r.url, answer: JSON.stringify(a) }); }
     else { tab.pending = r.text; pushState(); wc.loadURL(r.url); }
   } else if (r.kind === 'agent' && matchWorkflow(r.text)) {
     startAgent(matchWorkflow(r.text));
@@ -1355,6 +1407,7 @@ async function submit(text) {
       let res;
       try { res = await recall.ask({ question: r.text, memory, llm: m.ready ? llm : null, lang: L() }); } finally { tab.busy = false; tab.pending = ''; }
       if (!tabs.includes(tab)) return;
+      rememberMemoryThread(tab, r.text, res);
       query.results = JSON.stringify(res.sources.map((s) => ({ url: s.url, title: s.title, ts: s.ts, snippet: s.passages[0] || '' })));
       query.total = String(memory.size);
       query.recall = JSON.stringify({ answer: res.answer, cites: res.cites, remote: m.ready && m.remote ? m.remote : '' });

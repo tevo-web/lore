@@ -100,6 +100,13 @@ if (kind === 'loading' || kind === 'answer') {
   $('web').style.display = 'none';
 }
 
+// Under an answer: keep talking. The question goes to the assistant panel, which already holds this answer.
+if (kind === 'answer' || (kind === 'memory' && (p.get('results') || '[]') !== '[]')) {
+  $('follow').hidden = false;
+  $('followin').placeholder = T('ans.followph');
+  $('follow').addEventListener('submit', (e) => { e.preventDefault(); const f = $('followin').value.trim(); if (f) location.href = 'lore-follow:?q=' + encodeURIComponent(f); });
+}
+
 if (kind === 'answer') {
   const a = JSON.parse(p.get('answer'));
   if (a.claims) {
