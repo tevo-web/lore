@@ -1,7 +1,7 @@
 // Runs in every web page's sandboxed preload. Exposes nothing to the page.
 // PRV-10: when enabled (argument --lore-fp=1) it makes this browser look more like everyone else's and adds tiny noise to
 // canvas reads. The function below runs in the page's main world before any page script, so it must be self-contained.
-const { webFrame } = require('electron');
+const { webFrame, ipcRenderer } = require('electron');
 
 function applyFingerprintProtection() {
   const seed = Math.floor(Math.random() * 1e9);
@@ -58,11 +58,16 @@ function applyFingerprintProtection() {
 }
 
 // webFrame runs the code in the page's main world; Electron 33 has no contextBridge.executeInMainWorld yet.
+// Ad-removal scripts for this page (for example YouTube's), asked from the main process and run before any page script.
+try {
+  const ads = ipcRenderer.sendSync('ads:scripts');
+  // Each in its own function: the scripts declare helpers with the same names, and one shared scope makes them trip over each other.
+  if (Array.isArray(ads)) for (const code of ads) webFrame.executeJavaScript('(function () {\n' + code + '\n})();').catch(() => {});
+} catch { /* the page simply loads without them */ }
 if (process.argv.includes('--lore-fp=1')) webFrame.executeJavaScript('(' + applyFingerprintProtection.toString() + ')()');
 
 // BRW-12: when a person submits a form that has a password, tell the browser (never the page) so it can offer to save it.
 // Only real clicks and key presses count, not events a page makes up. The browser takes the site from the tab itself.
-const { ipcRenderer } = require('electron');
 // A page can make the browser submit a form by script, so a submit only counts when the person pressed a key or clicked a
 // moment ago; a page cannot fake those.
 let lastInput = 0;

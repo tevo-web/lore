@@ -22,6 +22,7 @@ Lore's own code is MIT-licensed. These components keep their own licences. Check
 | Component | Use | Notes |
 |---|---|---|
 | [ABPVN](https://abpvn.com) | Vietnam-specific ad filters | Downloaded into the user's data folder, **not bundled**, because its redistribution terms are unclear. Ask ABPVN before bundling |
+| [uBlock Origin filters](https://github.com/uBlockOrigin/uAssets) (filters, quick-fixes) and [Ghostery scriptlet resources](https://github.com/ghostery/adblocker) | Rules that remove ads from sites such as YouTube by editing the page's data before it is used | Downloaded into the user's data folder, **not bundled** (GPLv3 lists in an MIT app). Run in the page before its own scripts |
 | [Phishing.Database](https://github.com/mitchellkrogza/Phishing.Database) | Reported phishing domains for the scam warning | Downloaded weekly into the user's data folder. Licensed MIT upstream |
 | [Wikipedia](https://www.wikipedia.org) | Short excerpts for plain questions, always shown with a link to the article | Text is CC BY-SA 4.0 (and GFDL). Lore shows the article title and link as credit |
 

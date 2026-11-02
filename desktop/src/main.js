@@ -2849,6 +2849,12 @@ function wireIpc() {
   ipcMain.on('settings:open', (e) => { if (e.sender === win.webContents) openSettings(); });
   ipcMain.on('dl:start', (e, i) => { if (e.sender === panel.webContents) startDownload(Number(i)); });
   ipcMain.on('dl:reveal', (e) => { if (e.sender === panel.webContents && dl && dl.path) shell.showItemInFolder(dl.path); });
+  // The page asks (synchronously, before its own scripts) for the ad-removal scripts that apply to its address.
+  ipcMain.on('ads:scripts', (e) => {
+    let out = [];
+    try { const u = e.senderFrame && e.senderFrame.parent === null ? e.senderFrame.url : ''; if (S.adsOn && /^https?:/.test(u) && blocker) out = blocker.scripts(u); } catch { /* none */ }
+    e.returnValue = out;
+  });
   ipcMain.on('shield:toggle', () => { S.adsOn = !S.adsOn; pushState(); });
 }
 
