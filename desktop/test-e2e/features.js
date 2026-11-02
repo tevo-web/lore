@@ -1,5 +1,6 @@
 // PRV-03 cookie banners, PRV-10 fingerprint protection, AI-04 translation page scripts.
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
+ipcMain.on('ads:scripts', (e) => { e.returnValue = []; }); // the tab preload asks for these synchronously
 app.setPath('userData', require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'lore-e2e-')));
 const assert = require('node:assert');
 const path = require('path');
