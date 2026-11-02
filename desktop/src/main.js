@@ -55,6 +55,7 @@ const organize = require('./organize');
 const aibookmark = require('./aibookmark');
 const recall = require('./recall');
 const tabFind = require('./tabfind');
+const siteNews = require('./sitenews');
 const comparer = require('./compare');
 const topics = require('./topics');
 const modelplan = require('./modelplan');
@@ -1330,7 +1331,7 @@ async function submit(text) {
     tab.pending = r.text;
     pushState();
     let a;
-    try { a = await answerQuery(r.text, { llm, lang: L(), wiki: (q) => wikiAnswer(q, smartFetch) }); } finally { tab.busy = false; tab.pending = ''; }
+    try { a = await answerQuery(r.text, { llm, lang: L(), wiki: (q) => wikiAnswer(q, smartFetch), site: (q) => siteNews.lookup(q, smartFetch) }); } finally { tab.busy = false; tab.pending = ''; }
     if (!tabs.includes(tab)) return;
     if (a) loadHome(wc, { kind: 'answer', q: r.text, web: r.url, answer: JSON.stringify(a) });
     else { tab.pending = r.text; pushState(); wc.loadURL(r.url); }

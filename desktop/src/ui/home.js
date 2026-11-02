@@ -110,7 +110,7 @@ if (kind === 'answer') {
       const sup = document.createElement('sup');
       c.cites.forEach((n) => {
         const l = document.createElement('a');
-        l.href = a.sources[0].url;
+        l.href = (a.perSource && a.sources[n - 1] || a.sources[0]).url;
         l.textContent = '[' + n + ']';
         l.title = a.evidence[n - 1] || '';
         sup.append(l);
