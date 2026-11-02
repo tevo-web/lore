@@ -54,6 +54,7 @@ const secure = require('./security');
 const organize = require('./organize');
 const aibookmark = require('./aibookmark');
 const recall = require('./recall');
+const tabFind = require('./tabfind');
 const comparer = require('./compare');
 const topics = require('./topics');
 const modelplan = require('./modelplan');
@@ -1288,8 +1289,24 @@ async function answerFromMemory(question) {
   } catch { return false; }
 }
 
+// "open the tab Tevo Product": switches to the open tab that matches; else a page of that name from Memory; else says so.
+async function openByName(text) {
+  const want = tabFind.tabIntent(text);
+  if (!want) return false;
+  const hit = tabFind.findTab(tabs.map((t) => ({ id: t.id, title: t.title, url: t.lazyUrl || t.url, private: t.private })), want.name);
+  if (hit) { selectTab(hit.id); return true; }
+  try {
+    const pv = settings.get().privacy;
+    const mem = pv.memory && memory && (!pv.lock || !lockAvailable() || Date.now() < unlockedUntil) ? (await memory.search(want.name, Date.now(), 1, { minCover: 0.6 }))[0] : null;
+    if (mem) { openTab({ url: mem.url }); toast({ text: T('tab.fromMemory', { title: String(mem.title || mem.url).slice(0, 60) }) }); return true; }
+  } catch { /* fall through */ }
+  if (want.sure) { toast({ text: T('tab.none', { name: want.shown }) }); return true; }
+  return false; // "open the page about X" with no such tab is an ordinary request
+}
+
 async function submit(text) {
   if (!text.trim()) return;
+  if (await openByName(text)) return;
   // Typing the name of a saved task runs it.
   const saved = taskStore && taskStore.byName(text);
   if (saved) return openTasks({ select: saved.id, auto: true });
