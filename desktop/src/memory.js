@@ -121,7 +121,8 @@ class Memory {
     return this._queue;
   }
 
-  async search(query, now = Date.now(), limit = 8, { host, from, to } = {}) {
+  // minCover (0 to 1): the share of the question's words a page must contain, so an ordinary question only matches pages that are really about it.
+  async search(query, now = Date.now(), limit = 8, { host, from, to, minCover = 0 } = {}) {
     const q = tokens(query);
     const range = timeRange(query, now);
     let pool = this.items.filter((i) => (!range || (i.ts >= range[0] && i.ts <= range[1])) && (!host || hostOf(i.url) === host) && (!from || i.ts >= from) && (!to || i.ts <= to));
@@ -140,6 +141,7 @@ class Memory {
       return s + idf * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + (b * d.length) / avg)));
     }, 0));
     const maxBm = Math.max(...bm, 0) || 1;
+    const uq = [...new Set(q)];
 
     let qv = null;
     if (this.embedder && pool.some((i) => i.vec)) {
@@ -148,7 +150,9 @@ class Memory {
     const scored = pool.map((i, k) => {
       const cos = qv && i.vec ? Math.max(0, cosine(qv, fromB64(i.vec))) : 0;
       const score = qv ? 0.5 * (bm[k] / maxBm) + 0.5 * cos : bm[k] / maxBm;
-      return { i, score, keep: bm[k] > 0 || cos >= 0.55 };
+      const have = new Set(docs[k]);
+      const cover = uq.length ? uq.filter((t) => have.has(t)).length / uq.length : 0;
+      return { i, score, keep: (bm[k] > 0 || cos >= 0.55) && (!minCover || cover >= minCover || cos >= 0.75) };
     });
     return scored.filter((x) => x.keep).sort((a, b) => b.score - a.score || b.i.ts - a.i.ts).slice(0, limit)
       .map(({ i }) => ({ ...strip(i), snippet: snippetFor(i, q) }));

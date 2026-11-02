@@ -42,8 +42,8 @@ function parse(reply, count) {
 }
 
 // `memory` needs search() and items; `llm` may be null.
-async function ask({ question, memory, llm, lang = 'en', now = Date.now() }) {
-  const hits = await memory.search(question, now, MAX_SOURCES);
+async function ask({ question, memory, llm, lang = 'en', now = Date.now(), minCover = 0 }) {
+  const hits = await memory.search(question, now, MAX_SOURCES, { minCover });
   if (!hits.length) return { found: false, sources: [], answer: '', cites: [] };
   const items = hits.map((h) => memory.items.find((i) => i.url === h.url) || h);
   const sources = sourcesFor(items, question);

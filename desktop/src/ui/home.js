@@ -81,6 +81,8 @@ if (kind === 'memory') {
     if (r.snippet) { const sn = document.createElement('small'); sn.textContent = r.snippet; sn.style.marginTop = '4px'; a.append(sn); }
     box.append(a);
   }
+  // Asked as a plain question: Memory answered first, the web is one click away.
+  if (p.get('web')) { const w = document.createElement('a'); w.href = p.get('web'); w.className = 'btn'; w.style.marginTop = '14px'; w.textContent = T('ans.web'); box.append(w); }
 } else if (kind === 'agent') {
   noteWith(T('kind.agent') + ': "' + q0 + '"', T('note.agentNo'));
 } else if (kind === 'nopage') {

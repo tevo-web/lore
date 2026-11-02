@@ -1268,6 +1268,26 @@ async function translatePage(tab, mine, meta, m, live) {
   if (live()) sendPage({ ...meta, state: 'done', translated: blocks.length, target: pageassist.NAME[target], view: 'both' });
 }
 
+// Only for real questions, only when Memory is on and unlocked without asking the person (no fingerprint prompt for a plain
+// question), and only when pages that clearly cover the question exist and a model (or a very strong match) backs them.
+async function answerFromMemory(question) {
+  try {
+    const pv = settings.get().privacy;
+    if (!pv.memory || !memory || memory.size === 0 || question.trim().split(/\s+/).length < 3) return false;
+    if (pv.lock && lockAvailable() && Date.now() >= unlockedUntil) return false;
+    const m = await modelInfo();
+    const res = await recall.ask({ question, memory, llm: m.ready ? llm : null, lang: L(), minCover: 0.6 });
+    const usable = res.found && (res.answer || (!m.ready && res.sources.length && res.sources[0].passages.length));
+    if (!usable) return false;
+    const tab = active();
+    const wc = tab.view.webContents;
+    tab.title = question; tab.isHome = true;
+    loadHome(wc, { kind: 'memory', q: question, results: JSON.stringify(res.sources.map((s) => ({ url: s.url, title: s.title, ts: s.ts, snippet: s.passages[0] || '' }))), total: String(memory.size), recall: JSON.stringify({ answer: res.answer, cites: res.cites, remote: m.ready && m.remote ? m.remote : '' }), web: searchUrl(question) });
+    pushState();
+    return true;
+  } catch { return false; }
+}
+
 async function submit(text) {
   if (!text.trim()) return;
   // Typing the name of a saved task runs it.
@@ -1283,6 +1303,8 @@ async function submit(text) {
     if (active().media.length) openDownload();
     else loadHome(wc, { kind: 'download', q: r.text, novideo: '1' });
   } else if (r.kind === 'search') {
+    // A question about something already read is answered from Memory first; the web is the fallback.
+    if (await answerFromMemory(r.text)) return;
     const tab = active();
     tab.title = r.text;
     tab.isHome = true;
